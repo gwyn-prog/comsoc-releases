@@ -1,0 +1,47 @@
+name: Notify app update
+
+# Sends an "Update available" push to every Android phone when you PUBLISH a
+# release in this repo. Free: runs on GitHub, no Firebase Blaze plan needed.
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send push notification
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          RELEASE_NOTES: ${{ github.event.release.body }}
+        run: |
+          pip install --quiet google-auth requests
+          python - <<'PY'
+          import json, os, requests
+          from google.oauth2 import service_account
+          from google.auth.transport.requests import Request
+
+          info = json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"])
+          creds = service_account.Credentials.from_service_account_info(
+              info, scopes=["https://www.googleapis.com/auth/firebase.messaging"])
+          creds.refresh(Request())
+
+          notes = " ".join((os.environ.get("RELEASE_NOTES") or "").split())[:150]
+          body = notes or "A new version of the COMSOC app is ready. Open the app and tap Update."
+          message = {
+              "message": {
+                  "topic": "app_updates",
+                  "notification": {"title": "Update available", "body": body},
+                  "data": {"type": "app_update"},
+                  "android": {
+                      "priority": "HIGH",
+                      "notification": {"channel_id": "comsoc_alerts"},
+                  },
+              }
+          }
+          url = f"https://fcm.googleapis.com/v1/projects/{info['project_id']}/messages:send"
+          r = requests.post(url, json=message,
+                            headers={"Authorization": "Bearer " + creds.token})
+          print(r.status_code, r.text)
+          r.raise_for_status()
+          PY
